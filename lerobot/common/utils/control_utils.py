@@ -22,6 +22,7 @@ import traceback
 from contextlib import nullcontext
 from copy import copy
 from functools import cache
+from typing import List
 
 import numpy as np
 import torch
@@ -134,6 +135,45 @@ def predict_action(
 
     return action
 
+def predict_action_two_arm(
+    observation: dict[str, np.ndarray],
+    policy: PreTrainedPolicy,
+    device: torch.device,
+    use_amp: bool,
+    task: str | None = None,
+    robot_type: str | None = None,
+):
+    observation = copy(observation)
+    with (
+        torch.inference_mode(),
+        torch.autocast(device_type=device.type) if device.type == "cuda" and use_amp else nullcontext(),
+    ):
+        # Convert to pytorch format: channel first and float32 in [0,1] with batch dimension
+        for name in observation:
+            observation[name] = torch.from_numpy(observation[name])
+            if "image" in name:
+                observation[name] = observation[name].type(torch.float32) / 255
+                observation[name] = observation[name].permute(2, 0, 1).contiguous()
+            observation[name] = observation[name].unsqueeze(0)
+            observation[name] = observation[name].to(device)
+
+        observation["task"] = task if task else ""
+        observation["robot_type"] = robot_type if robot_type else ""
+
+        # Compute the next action with the policy
+        # based on the current observation
+        action = policy.select_action(observation)
+
+        # Remove batch dimension
+        action = action.squeeze(0)
+
+        # Move to cpu, if not already the case
+        action = action.to("cpu")
+
+        print("action shape:", action.shape)
+        
+    return action
+
 
 def init_keyboard_listener():
     # Allow to exit early while recording an episode or resetting the environment,
@@ -213,3 +253,8 @@ def sanity_check_dataset_robot_compatibility(
         raise ValueError(
             "Dataset metadata compatibility check failed with mismatches:\n" + "\n".join(mismatches)
         )
+
+def sanity_check_dataset_and_multi_robots_compatibility(
+    dataset: LeRobotDataset, robots: List[Robot], fps: int, features: dict
+) -> None:
+    pass
